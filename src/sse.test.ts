@@ -38,4 +38,11 @@ describe("native compaction SSE", () => {
 		expect(text).toContain("checkpoint marker")
 		expect(text).toEndWith("data: [DONE]\n\n")
 	})
+
+	test("can carry a host-wrapped checkpoint summary", async () => {
+		const summary = "## Additional Context\nOpenAI Codex native checkpoint [oc-codex:v1:12345678-1234-4234-9234-123456789abc]"
+		const text = await markerResponse(summary).text()
+		expect(text).toContain("## Additional Context")
+		expect(text).toContain("oc-codex:v1:12345678-1234-4234-9234-123456789abc")
+	})
 })

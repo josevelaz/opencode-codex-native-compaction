@@ -38,7 +38,7 @@ The plugin does not control the compaction threshold. A normal turn alone does n
 | `native compaction context requires ...` | Use the provider, model, and variant named in the error. |
 | `native compaction checkpoint requires ...` | Switch back to the model and variant that created the checkpoint. |
 | `tail compaction requires switching back ...` | Return to the checkpoint's original OpenAI subscription model before compacting. |
-| `native compaction is already active for this session` | Wait for the current compaction to finish. If it remains stuck, preserve the logs and report the failure. |
+| Compaction stays running after an error | Reload the plugin or restart the OpenCode service, then retry. A failed attempt should clear uncommitted pending state; a reload clears in-memory leftovers from older plugin versions. |
 
 When another provider gets a warning about missing older context, that warning is expected. It can continue with messages after the checkpoint, but cannot read the opaque earlier context.
 

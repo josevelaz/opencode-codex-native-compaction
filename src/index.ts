@@ -5,8 +5,8 @@ import { RETAINED_TOKEN_BUDGET } from "./history"
 import {
 	baseRequestBody,
 	boundResponseImages,
-	checkpointMarker,
 	encodeDurableItems,
+	hostCheckpointSummary,
 	isObject,
 	markerIDs,
 	markerItemIndex,
@@ -19,6 +19,13 @@ import {
 	type ModelRef,
 	type ResponseItem,
 } from "./protocol"
+import {
+	compactionHttpAction,
+	shouldDiscardCheckpoint,
+	summaryCommitsCheckpoint,
+	terminalEventTargetsAttempt,
+	type PendingPhase,
+} from "./pending"
 import { markerResponse, parseNativeCompaction } from "./sse"
 import {
 	checkpointKey,
@@ -37,7 +44,9 @@ type PendingCompaction = {
 	model: ModelRef
 	input: ResponseItem[]
 	retainedTokenBudget: number
-	phase: "response" | "committing"
+	phase: PendingPhase
+	createdAt: number
+	usage?: JsonObject
 }
 
 type SessionState = {
@@ -222,6 +231,20 @@ export default Plugin.define({
 			await ctx.storage.set(activeCheckpointKey(sessionID), { version: 1, checkpointID })
 		}
 
+		const discardUncommitted = async (sessionID: string, checkpointID: string, reason: string) => {
+			const state = sessions.get(sessionID)
+			if (state?.pending?.checkpointID === checkpointID) state.pending = undefined
+			const activeID = await activeCheckpointID(sessionID)
+			if (!shouldDiscardCheckpoint({ checkpointID, activeID, hostCommitted: false })) {
+				log("compaction attempt left committed checkpoint in place", { sessionID, checkpointID, reason })
+				return
+			}
+			await ctx.storage.remove(checkpointKey(sessionID, checkpointID))
+			log(reason, { sessionID, checkpointID })
+		}
+
+		const markerSSE = (pending: PendingCompaction) => markerResponse(hostCheckpointSummary(pending.checkpointID), pending.usage)
+
 		const inputWithActiveCheckpoint = async (items: ResponseItem[], sessionID: string, model: ModelRef) => {
 			const checkpointID = await activeCheckpointID(sessionID)
 			if (!checkpointID) return structuredClone(items)
@@ -299,24 +322,44 @@ export default Plugin.define({
 				for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
 					try {
 						if (event.type === "session.compaction.failed") {
-							const state = sessions.get(event.data.sessionID)
-							if (!state?.pending) continue
-							const checkpointID = state.pending.checkpointID
-							state.pending = undefined
-							await ctx.storage.remove(checkpointKey(event.data.sessionID, checkpointID))
-							log("compaction failed", { sessionID: event.data.sessionID, checkpointID })
+							const pending = sessions.get(event.data.sessionID)?.pending
+							if (!pending || !terminalEventTargetsAttempt(pending, event.created)) continue
+							await discardUncommitted(event.data.sessionID, pending.checkpointID, "compaction failed")
 						} else if (event.type === "session.compaction.ended") {
-							const state = sessions.get(event.data.sessionID)
-							if (!state?.pending) continue
-							const checkpointID = state.pending.checkpointID
-							state.pending = undefined
-							const expected = checkpointMarker(checkpointID)
-							if (!event.data.text.includes(expected)) {
-								await ctx.storage.remove(checkpointKey(event.data.sessionID, checkpointID))
-								log("compaction marker was not committed", { sessionID: event.data.sessionID, checkpointID })
-							} else {
-								await setActiveCheckpoint(event.data.sessionID, checkpointID)
-								log("compaction committed", { sessionID: event.data.sessionID, checkpointID })
+							const sessionID = event.data.sessionID
+							const state = sessions.get(sessionID)
+							const pending = state?.pending
+							const text = event.data.text
+							const ids = markerIDs(text)
+							if (ids.length > 1) throw new Error("native compaction summary contains multiple checkpoint markers")
+							const endedID = ids[0]
+							if (pending && !terminalEventTargetsAttempt(pending, event.created) && endedID !== pending.checkpointID) {
+								continue
+							}
+							if (pending && state && summaryCommitsCheckpoint(text, pending.checkpointID)) {
+								state.pending = undefined
+								await setActiveCheckpoint(sessionID, pending.checkpointID)
+								log("compaction committed", { sessionID, checkpointID: pending.checkpointID })
+								continue
+							}
+							if (pending && (!endedID || endedID === pending.checkpointID)) {
+								if (terminalEventTargetsAttempt(pending, event.created)) {
+									await discardUncommitted(sessionID, pending.checkpointID, "compaction marker was not committed")
+								}
+								continue
+							}
+							if (endedID && pending && endedID !== pending.checkpointID) {
+								if (await ctx.storage.get(checkpointKey(sessionID, endedID)) !== undefined) {
+									await setActiveCheckpoint(sessionID, endedID)
+									log("compaction committed earlier attempt", { sessionID, checkpointID: endedID })
+								}
+								continue
+							}
+							if (endedID && !pending && await activeCheckpointID(sessionID) === undefined) {
+								if (await ctx.storage.get(checkpointKey(sessionID, endedID)) !== undefined) {
+									await setActiveCheckpoint(sessionID, endedID)
+									log("compaction committed", { sessionID, checkpointID: endedID })
+								}
 							}
 						} else if (event.type === "session.forked") {
 							await copyForkCheckpoints(event.data.parentID, event.data.sessionID)
@@ -331,7 +374,9 @@ export default Plugin.define({
 						} else if (event.type === "session.revert.committed") {
 							await ctx.storage.remove(activeCheckpointKey(event.data.sessionID))
 						} else if (event.type === "session.deleted") {
+							const pending = sessions.get(event.data.sessionID)?.pending
 							sessions.delete(event.data.sessionID)
+							if (pending) await ctx.storage.remove(checkpointKey(event.data.sessionID, pending.checkpointID))
 							await ctx.storage.remove(requestContextKey(event.data.sessionID))
 							await ctx.storage.remove(activeCheckpointKey(event.data.sessionID))
 						}
@@ -403,13 +448,35 @@ export default Plugin.define({
 			const state = stateOf(event.sessionID)
 
 			if (event.agent === "compaction") {
-				if (state.pending) throw new Error("native compaction is already active for this session")
 				await hydrateRequestContext(event.sessionID, state)
 				if (!state.snapshot || !state.base || !state.model) {
 					throw new Error("native compaction has no finalized normal request context")
 				}
 				if (modelKey(state.model) !== modelKey(model)) {
 					throw new Error(`native compaction context requires ${modelKey(state.model)}`)
+				}
+				if (compactionHttpAction(state.pending) === "retry" && state.pending) {
+					const pending = state.pending
+					if (pending.phase === "committing") {
+						log("native compaction retry replaying stored checkpoint", {
+							sessionID: event.sessionID,
+							checkpointID: pending.checkpointID,
+						})
+						return
+					}
+					const retryHeaders = new Headers(event.request.headers)
+					mergeFeatureHeader(retryHeaders)
+					try {
+						event.request = replaceJsonRequest(event.request, nativeCompactionBody(state.base, pending.input), retryHeaders)
+					} catch (error) {
+						await discardUncommitted(event.sessionID, pending.checkpointID, "native compaction retry dispatch failed")
+						throw error
+					}
+					log("native compaction retry dispatched", {
+						sessionID: event.sessionID,
+						checkpointID: pending.checkpointID,
+					})
+					return
 				}
 				const durableContext = await ctx.session.context({ sessionID: event.sessionID })
 				const retainedTokenBudget = retainedTokenBudgetForDurable(durableContext)
@@ -426,11 +493,15 @@ export default Plugin.define({
 				}
 				const input = boundResponseImages(await inputWithActiveCheckpoint(encoded, event.sessionID, model))
 				const checkpointID = crypto.randomUUID()
-				state.pending = { checkpointID, model, input, retainedTokenBudget, phase: "response" }
-
+				state.pending = { checkpointID, model, input, retainedTokenBudget, phase: "response", createdAt: Date.now() }
 				const headers = new Headers(event.request.headers)
 				mergeFeatureHeader(headers)
-				event.request = replaceJsonRequest(event.request, nativeCompactionBody(state.base, input), headers)
+				try {
+					event.request = replaceJsonRequest(event.request, nativeCompactionBody(state.base, input), headers)
+				} catch (error) {
+					state.pending = undefined
+					throw error
+				}
 				log("native compaction dispatched", { sessionID: event.sessionID, checkpointID })
 				return
 			}
@@ -455,22 +526,31 @@ export default Plugin.define({
 
 		await ctx.session.hook("http.response", async (event) => {
 			if (event.agent !== "compaction" || event.model.providerID !== "openai") return
-			const state = sessions.get(event.sessionID)
-			const pending = state?.pending
-			if (!pending || pending.phase !== "response") return
-
-			const result = await parseNativeCompaction(event.response.clone())
-			const checkpoint: NativeCheckpoint = {
-				version: 1,
-				sessionID: event.sessionID,
-				model: pending.model,
-				replacementHistory: replacementHistory(pending.input, result.item, pending.retainedTokenBudget),
-				createdAt: Date.now(),
+			const pending = sessions.get(event.sessionID)?.pending
+			if (!pending) return
+			if (pending.phase === "committing") {
+				event.response = markerSSE(pending)
+				log("native checkpoint replayed", { sessionID: event.sessionID, checkpointID: pending.checkpointID })
+				return
 			}
-			await ctx.storage.set(checkpointKey(event.sessionID, pending.checkpointID), storageJson(checkpoint))
-			pending.phase = "committing"
-			event.response = markerResponse(checkpointMarker(pending.checkpointID), result.usage)
-			log("native checkpoint stored", { sessionID: event.sessionID, checkpointID: pending.checkpointID })
+			try {
+				const result = await parseNativeCompaction(event.response.clone())
+				const checkpoint: NativeCheckpoint = {
+					version: 1,
+					sessionID: event.sessionID,
+					model: pending.model,
+					replacementHistory: replacementHistory(pending.input, result.item, pending.retainedTokenBudget),
+					createdAt: Date.now(),
+				}
+				await ctx.storage.set(checkpointKey(event.sessionID, pending.checkpointID), storageJson(checkpoint))
+				pending.phase = "committing"
+				pending.usage = result.usage
+				event.response = markerSSE(pending)
+				log("native checkpoint stored", { sessionID: event.sessionID, checkpointID: pending.checkpointID })
+			} catch (error) {
+				await discardUncommitted(event.sessionID, pending.checkpointID, "native compaction response failed")
+				throw error
+			}
 		})
 
 		return () => {

@@ -36,6 +36,10 @@ export function checkpointMarker(checkpointID: string): string {
 	return `OpenAI Codex native checkpoint [oc-codex:v1:${checkpointID}]`
 }
 
+export function hostCheckpointSummary(checkpointID: string): string {
+	return `## Additional Context\n${checkpointMarker(checkpointID)}`
+}
+
 function textValues(value: unknown): string[] {
 	if (typeof value === "string") return [value]
 	if (Array.isArray(value)) return value.flatMap(textValues)
