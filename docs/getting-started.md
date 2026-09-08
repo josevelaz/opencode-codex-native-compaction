@@ -69,7 +69,8 @@ Let OpenCode trigger compaction, or use its compaction control. The plugin has n
 
 After a successful native compaction, the transcript contains:
 
-```text
+```markdown
+## Additional Context
 OpenAI Codex native checkpoint [oc-codex:v1:<uuid>]
 ```
 

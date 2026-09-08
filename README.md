@@ -32,7 +32,8 @@ opencode2 service status
 
 Use an OpenAI subscription model for a normal turn before compacting. OpenCode still controls when compaction runs; the plugin adds no threshold settings. A successful native compaction writes this marker to the transcript:
 
-```text
+```markdown
+## Additional Context
 OpenAI Codex native checkpoint [oc-codex:v1:<uuid>]
 ```
 

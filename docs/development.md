@@ -32,6 +32,7 @@ The npm package ships TypeScript source, its license, and README. Tests, documen
 | --- | --- |
 | `src/index.ts` | Plugin options, hooks, request interception, and checkpoint lifecycle. |
 | `src/protocol.ts` | Codex request encoding, marker parsing, and image limits. |
+| `src/pending.ts` | Compaction attempt retry vs cleanup decisions. |
 | `src/history.ts` | Retained text selection and checkpoint replacement history. |
 | `src/sse.ts` | Native response validation and transcript-marker response. |
 | `src/state.ts` | Stored checkpoint validation and model compatibility. |

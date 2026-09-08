@@ -14,7 +14,14 @@ OpenCode normally asks a model for a text summary when it compacts a conversatio
 3. **Restore earlier context.** If the session already has a native checkpoint, the plugin includes its replacement history.
 4. **Request native compaction.** The plugin adds `remote_compaction_v2` to `x-codex-beta-features` and sends a `compaction_trigger` item. The request uses `store: false` and streaming responses.
 5. **Store the result.** The plugin requires one compaction item with non-empty `encrypted_content` and a completed response. It stores replacement history through OpenCode's plugin storage API.
-6. **Commit a marker.** The transcript receives only `OpenAI Codex native checkpoint [oc-codex:v1:<uuid>]`. Once OpenCode confirms compaction, the checkpoint becomes active.
+6. **Commit a marker.** The transcript receives this host-compatible summary:
+
+   ```markdown
+   ## Additional Context
+   OpenAI Codex native checkpoint [oc-codex:v1:<uuid>]
+   ```
+
+   The heading is required by current OpenCode summary validation. The checkpoint ID, stored opaque payload, and recognition of older bare markers stay the same. Once OpenCode confirms compaction, the checkpoint becomes active.
 7. **Replay.** Later requests on the original OpenAI model and variant replace the marker with the stored history and append the messages after it.
 
 Warm-up requests without tools can use the checkpoint without replacing the last durable tool-bearing request context used for compaction.
@@ -59,5 +66,7 @@ Do not remove checkpoint storage while you still need sessions that reference it
 ## Failure handling
 
 The plugin rejects missing, malformed, duplicate, or incompatible checkpoints. It also rejects HTTP errors, malformed server-sent events (SSE), incomplete streams, and responses without exactly one valid compaction item. It does not intentionally convert an unreadable checkpoint into an incomplete text summary.
+
+If OpenCode retries the same compaction after the plugin has stored a checkpoint, the plugin replays that marker instead of starting a second native compaction. A failed attempt removes only uncommitted checkpoint data and leaves a previously active checkpoint in place. A delayed terminal event cannot clear a newer attempt.
 
 See [Troubleshooting](troubleshooting.html) for error messages and recovery steps.
