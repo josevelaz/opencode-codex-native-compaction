@@ -1,6 +1,6 @@
 {
   "name": "@josevelaz/opencode-codex-native-compaction",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenCode plugin that replaces text compaction with OpenAI Codex remote_compaction_v2",
   "type": "module",
   "main": "src/index.ts",
