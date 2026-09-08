@@ -4,6 +4,7 @@ import {
 	boundResponseImages,
 	checkpointMarker,
 	encodeDurableItems,
+	hostCheckpointSummary,
 	markerIDs,
 	markerItemIndex,
 	mergeFeatureHeader,
@@ -35,6 +36,23 @@ describe("protocol", () => {
 		expect(markerItemIndex([{ role: "user", content: marker }])).toEqual({ index: 0, checkpointID: CHECKPOINT_ID })
 	})
 
+	test("wraps the marker under a host-recognized heading", () => {
+		const summary = hostCheckpointSummary(CHECKPOINT_ID)
+		expect(summary).toBe(`## Additional Context\n${checkpointMarker(CHECKPOINT_ID)}`)
+		expect(markerIDs(summary)).toEqual([CHECKPOINT_ID])
+		const headings = [
+			"## Objective",
+			"## Requirements",
+			"## Decisions",
+			"## Work State",
+			"## Next Move",
+			"## Relevant Files",
+			"## Additional Context",
+		]
+		expect(summary.split("\n").some((line) => headings.includes(line.trim()))).toBe(true)
+		expect(checkpointMarker(CHECKPOINT_ID).split("\n").some((line) => headings.includes(line.trim()))).toBe(false)
+	})
+
 	test("rejects duplicate markers", () => {
 		const marker = checkpointMarker(CHECKPOINT_ID)
 		expect(() => markerItemIndex([{ content: marker }, { content: marker }])).toThrow("multiple checkpoint markers")
@@ -59,6 +77,17 @@ describe("protocol", () => {
 				{ role: "user", content: "new" },
 			],
 		}, CHECKPOINT_ID)).toEqual({ messages: [{ role: "user", content: "new" }] })
+	})
+
+	test("drops a host-wrapped checkpoint message and keeps later messages", () => {
+		const summary = hostCheckpointSummary(CHECKPOINT_ID)
+		expect(historyAfterMarker({
+			input: [
+				{ role: "user", content: "old" },
+				{ role: "assistant", content: summary },
+				{ role: "user", content: "new" },
+			],
+		}, CHECKPOINT_ID)).toEqual({ input: [{ role: "user", content: "new" }] })
 	})
 
 	test("keeps retained context stored after a marker in the same message", () => {
@@ -158,6 +187,17 @@ describe("protocol", () => {
 			durable: [{ type: "compaction", status: "completed", summary: marker, recent: "" }],
 		})
 		expect(markerItemIndex(items)).toEqual({ index: 0, checkpointID: CHECKPOINT_ID })
+	})
+
+	test("encodes a host-wrapped checkpoint marker without leaving the UUID in unresolved form", async () => {
+		const summary = hostCheckpointSummary(CHECKPOINT_ID)
+		const items = await encodeDurableItems({
+			model: { providerID: "openai", id: "gpt-5.3-codex-spark" },
+			snapshot: { system: [], tools: {} },
+			durable: [{ type: "compaction", status: "completed", summary, recent: "retained tail" }],
+		})
+		expect(markerItemIndex(items)).toEqual({ index: 0, checkpointID: CHECKPOINT_ID })
+		expect(JSON.stringify(items)).toContain("retained tail")
 	})
 
 	test("keeps OpenCode's retained tail after a completed native marker", async () => {

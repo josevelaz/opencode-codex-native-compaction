@@ -10,6 +10,7 @@
   "files": [
     "src/history.ts",
     "src/index.ts",
+    "src/pending.ts",
     "src/protocol.ts",
     "src/sse.ts",
     "src/state.ts",
