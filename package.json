@@ -1,0 +1,60 @@
+{
+  "name": "@josevelaz/opencode-codex-native-compaction",
+  "version": "0.0.0",
+  "description": "OpenCode plugin that replaces text compaction with OpenAI Codex remote_compaction_v2",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src/history.ts",
+    "src/index.ts",
+    "src/protocol.ts",
+    "src/sse.ts",
+    "src/state.ts",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "codex",
+    "compaction",
+    "openai",
+    "chatgpt"
+  ],
+  "license": "MIT",
+  "author": "Jose Velazquez",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/josevelaz/opencode-codex-native-compaction.git"
+  },
+  "bugs": {
+    "url": "https://github.com/josevelaz/opencode-codex-native-compaction/issues"
+  },
+  "homepage": "https://josevelaz.github.io/opencode-codex-native-compaction/",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM,DOM.Iterable --types bun src/*.ts && tsc --noEmit -p .github/scripts/release/tsconfig.json",
+    "validate": "bun test && bun run typecheck",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@opencode-ai/ai": "0.0.0-beta-18286",
+    "@opencode-ai/core": "0.0.0-beta-18286",
+    "@opencode-ai/plugin": "0.0.0-beta-18286",
+    "effect": "4.0.0-rc.111"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.8.2"
+  }
+}

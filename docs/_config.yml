@@ -1,0 +1,25 @@
+title: Codex Native Compaction
+description: Native OpenAI Codex checkpoints for OpenCode V2
+url: https://josevelaz.github.io
+baseurl: /opencode-codex-native-compaction
+markdown: kramdown
+kramdown:
+  input: GFM
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+navigation:
+  - title: Overview
+    url: /
+  - title: Getting started
+    url: /getting-started.html
+  - title: How it works
+    url: /how-it-works.html
+  - title: Troubleshooting
+    url: /troubleshooting.html
+  - title: Development
+    url: /development.html
+  - title: Releases
+    url: /releases.html

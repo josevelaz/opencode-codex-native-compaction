@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page.title | escape }} · {{ site.title | escape }}</title>
+    <meta name="description" content="{{ page.description | default: site.description | escape }}">
+    <link rel="stylesheet" href="{{ '/assets/style.css' | relative_url }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header>
+      <a class="brand" href="{{ '/' | relative_url }}">{{ site.title | escape }}</a>
+      <span class="label">OpenCode V2 plugin · Experimental</span>
+      <a href="https://github.com/josevelaz/opencode-codex-native-compaction">GitHub ↗</a>
+    </header>
+    <div class="layout">
+      <nav aria-label="Documentation">
+        {% for item in site.navigation %}
+        <a href="{{ item.url | relative_url }}"{% if page.url == item.url %} aria-current="page"{% endif %}>{{ item.title | escape }}</a>
+        {% endfor %}
+      </nav>
+      <main id="main" tabindex="-1">
+        {{ content }}
+        <footer>
+          <a href="https://github.com/josevelaz/opencode-codex-native-compaction/issues">Report an issue</a>
+          <span>MIT license · Jose Velazquez</span>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,180 @@
+# Manual trunk-based release orchestrator.
+#
+# This is the only release path. Do not add semantic-release, a second release
+# workflow, or a PAT/App token. Only GITHUB_TOKEN is used.
+#
+# Design notes:
+# - The `guard` job has only `actions: read`. It verifies the existing release
+#   environment and its sole main branch policy before any
+#   job declares `environment: release`.
+# - The solo maintainer dispatches releases. No second reviewer is required.
+#   Dry runs and mutations use the same main-only `release` environment.
+# - Movable major tags (X) are procedural integrity only. GITHUB_TOKEN cannot
+#   be a ruleset bypass actor.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Release operation to run
+        required: true
+        type: choice
+        options:
+          - cut
+          - backport
+          - draft
+          - publish
+          - cancel
+          - retire
+          - restore
+      version:
+        description: Canonical SemVer without a leading v (operation-specific)
+        required: false
+        type: string
+      release_line:
+        description: Release line name such as release/v1.0 (operation-specific)
+        required: false
+        type: string
+      commits:
+        description: Comma-separated full SHAs to backport (backport only)
+        required: false
+        type: string
+      confirmation:
+        description: Exact confirmation phrase for destructive operations
+        required: false
+        type: string
+      dry_run:
+        description: Plan and write artifacts without mutating the repository
+        required: false
+        type: boolean
+        default: true
+      resume_proof:
+        description: >-
+          Cancel-only prior-run artifact content used to resume a half-canceled
+          cancel; omit for a fresh cancel
+        required: false
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Require main and a main-only release environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Release must run from refs/heads/main (got: ${GITHUB_REF})." >&2
+            exit 1
+          fi
+
+          environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release")"
+          policies="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release/deployment-branch-policies")"
+
+          if ! printf '%s' "${environment}" | jq -e '
+            .can_admins_bypass == false
+            and .deployment_branch_policy.protected_branches == false
+            and .deployment_branch_policy.custom_branch_policies == true
+          ' >/dev/null; then
+            echo "Environment 'release' must disable administrator bypass and use custom branch protection. Fail closed." >&2
+            exit 1
+          fi
+
+          if ! printf '%s' "${policies}" | jq -e '
+            .total_count == 1
+            and (.branch_policies | length == 1)
+            and .branch_policies[0].name == "main"
+            and .branch_policies[0].type == "branch"
+          ' >/dev/null; then
+            echo "Environment 'release' must permit only the main branch. Fail closed." >&2
+            exit 1
+          fi
+
+          echo "Guard passed: refs/heads/main and main-only release environment."
+
+  execute:
+    name: Execute
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      id-token: write
+    steps:
+      - name: Checkout approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify checkout matches dispatch SHA
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "${actual}" != "${GITHUB_SHA}" ]; then
+            echo "Checked-out HEAD (${actual}) does not match dispatch GITHUB_SHA (${GITHUB_SHA}). Fail closed." >&2
+            exit 1
+          fi
+          echo "Checkout verified: HEAD == ${GITHUB_SHA}"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Validate
+        run: bun run validate
+
+      - name: Configure release commit identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Run release CLI
+        env:
+          RELEASE_OPERATION: ${{ inputs.operation }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_LINE: ${{ inputs.release_line }}
+          RELEASE_COMMITS: ${{ inputs.commits }}
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+          RELEASE_DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_RESUME_PROOF: ${{ inputs.resume_proof }}
+          RELEASE_OUTPUT_DIR: ${{ github.workspace }}/release-output
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: bun .github/scripts/release/src/main.ts
+
+      - name: Upload release artifacts
+        if: always() && hashFiles('release-output/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-output
+          path: release-output/
+          retention-days: 30
+          if-no-files-found: ignore
